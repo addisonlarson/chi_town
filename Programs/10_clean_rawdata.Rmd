@@ -1,0 +1,237 @@
+---
+title: "10_clean_rawdata"
+author: "Addison Larson"
+date: "Started 20221114 // Last knitted `r format(Sys.time(), '%Y%m%d')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    theme: yeti
+knit: (function(inputFile, encoding) {
+      rmarkdown::render(inputFile,
+                        encoding = encoding,
+                        output_dir = "C:/Users/ALarson/My_Projects/chi_town/Programs",
+                        output_file = "10_clean_rawdata.html") })
+---
+
+**Purpose:** Clean up the data files downloaded in `01_download_rawdata.R` and saved in `./Data/Raw` so they're easier to combine into a tract-level analysis file later. 
+
+# Setup
+
+```{r setup}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(sf)
+library(assertr)
+library(here)
+library(ggplot2)
+library(stringr)
+library(janitor)
+
+root  <- here()
+raw   <- file.path(root, "Data/Raw")
+input <- file.path(root, "Data/Input")
+
+projection <- "+proj=tmerc +lat_0=36.66666666666666 +lon_0=-88.33333333333333 +k=0.9999749999999999 +x_0=300000.0000000001 +y_0=0 +ellps=GRS80 +datum=NAD83 +to_meter=0.3048006096012192 +no_defs"
+
+```
+
+# Clean data
+
+## Neighborhood boundaries
+
+```{r nhoods_boundaries}
+
+nhoods_boundaries_raw <- st_read(file.path(raw, "nhoods_boundaries.geojson"))
+
+glimpse(nhoods_boundaries_raw)
+
+nhoods_boundaries <- nhoods_boundaries_raw %>%
+  assert(is_uniq, pri_neigh) %>%
+  select(pri_neigh) %>%
+  rename(neighborhood = pri_neigh) %>%
+  st_transform(projection)
+
+city_boundaries <- nhoods_boundaries %>%
+  summarize(geometry = st_union(geometry))
+
+```
+
+## Census tract boundaries
+
+- Only retain census tracts intersecting with city boundary.
+- Save a list of these GEOIDs to restrict median rent file.
+
+```{r tract_boundaries}
+
+tract_boundaries_raw <- st_read(file.path(raw, "tract_boundaries.gpkg"))
+
+glimpse(tract_boundaries_raw)
+
+tract_boundaries <- tract_boundaries_raw %>%
+  assert(is_uniq, GEOID) %>%
+  rename(geoid = GEOID) %>%
+  st_transform(projection)
+
+# Run intersection; convert results to vector with values 0 (Not in Chicago); 1 (In Chicago)
+intersects_city <- st_intersects(tract_boundaries, city_boundaries) %>%
+  lapply(., function(i) ifelse(length(i) == 0, 0, 1)) %>%
+  unlist(.)
+
+stopifnot(length(intersects_city) == nrow(tract_boundaries))
+
+# Append to data frame
+tract_boundaries$in_chicago <- intersects_city
+
+table(tract_boundaries$in_chicago)
+
+ggplot(data = tract_boundaries) +
+  geom_sf(aes(fill = in_chicago))
+
+tract_boundaries <- tract_boundaries %>%
+  filter(in_chicago == 1) %>%
+  select(geoid)
+
+chicago_tracts <- tract_boundaries$geoid
+
+```
+
+## Median rent of census tracts
+
+```{r median_rent}
+
+median_rent_raw <- read.csv(file.path(raw, "median_rent.csv"))
+
+glimpse(median_rent_raw)
+
+median_rent <- median_rent_raw %>%
+  assert(is_uniq, GEOID) %>%
+  rename(
+    geoid = GEOID,
+    median_rent_est = estimate,
+    median_rent_moe = moe
+  ) %>%
+  filter(geoid %in% chicago_tracts)
+
+stopifnot(all(sort(median_rent$geoid) == sort(tract_boundaries$geoid)))
+
+```
+
+## Census tract centroids
+
+These points may come in handy when computing distances.
+
+```{r tract_centroids}
+
+tract_centroids <- st_centroid(tract_boundaries)
+
+plot(st_geometry(tract_boundaries))
+plot(st_geometry(tract_centroids), add = TRUE, col = "blue", pch = 20)
+
+```
+
+## Parks locations
+
+```{r parks}
+
+parks_locations_raw <- st_read(file.path(raw, "parks_locations.geojson"))
+
+glimpse(parks_locations_raw)
+
+# Drop "unimproved" and "pending"
+table(parks_locations_raw$park_class)
+
+parks_locations <- parks_locations_raw %>%
+  assert(is_uniq, park) %>%
+  filter(!(grepl("^UNIMPROVED|^PENDING", park_class))) %>%
+  select(park, label, park_class) %>%
+  st_transform(., projection)
+
+plot(st_geometry(city_boundaries))
+plot(st_geometry(parks_locations), add = TRUE, col = "darkgreen")
+
+```
+
+## Library locations
+
+```{r libraries}
+
+library_locations_raw <- read.csv(file.path(raw, "library_locations.csv"))
+
+# Need to parse location X, Y and convert file to spatial
+glimpse(library_locations_raw)
+
+library_locations <- library_locations_raw %>%
+  assert(is_uniq, NAME) %>%
+  # Verify pattern is "(num.num, -num.num)"
+  verify(str_detect(LOCATION, "^\\(\\d+\\.\\d+, -\\d+\\.\\d+\\)")) %>%
+  # Drop unneeded parens, then extract x and y from location column
+  mutate(
+    location_noparens = str_replace_all(LOCATION, "\\(|\\)", ""),
+    y = str_split_fixed(location_noparens, ", ", 2)[,1],
+    x = str_split_fixed(location_noparens, ", ", 2)[,2],
+    y2 = y,
+    x2 = x
+  ) %>%
+  st_as_sf(., coords = c("x2", "y2"), crs = 4326) %>%
+  st_transform(., projection) %>%
+  rename(name = NAME) %>%
+  select(name, x, y)
+
+plot(st_geometry(city_boundaries))
+plot(st_geometry(library_locations), add = TRUE)
+
+```
+
+## Grocery locations
+
+```{r grocery}
+
+grocery_locations_raw <- read.csv(file.path(raw, "grocery_locations.csv")) %>%
+  clean_names(.)
+
+glimpse(grocery_locations_raw)
+
+grocery_locations <- grocery_locations_raw %>%
+  mutate(latitude2 = latitude,
+         longitude2 = longitude) %>%
+  st_as_sf(., coords = c("longitude2", "latitude2"), crs = 4326) %>%
+  select(store_name, license_id, account_number, latitude, longitude) %>%
+  st_transform(., projection)
+
+plot(st_geometry(city_boundaries))
+plot(st_geometry(grocery_locations), add = TRUE)
+
+```
+
+# Export
+
+```{r export}
+
+export_spatial <- function(obj) {
+  
+  obj_name <- paste0(obj, ".gpkg")
+  
+  get(obj) %>%
+    st_transform(., 4326) %>%
+    st_write(., file.path(input, obj_name), delete_dsn = TRUE)
+  
+}
+
+lapply(
+  c("nhoods_boundaries",
+    "city_boundaries",
+    "tract_boundaries",
+    "tract_centroids",
+    "parks_locations",
+    "library_locations",
+    "grocery_locations"),
+  export_spatial
+)
+
+write.csv(median_rent, file.path(input, "median_rent.csv"), row.names = FALSE)
+
+```
