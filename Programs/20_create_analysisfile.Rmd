@@ -1,0 +1,331 @@
+---
+title: "20_create_analysisfile"
+author: "Addison Larson"
+date: "Started 20221114 // Last knitted `r format(Sys.time(), '%Y%m%d')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    theme: yeti
+knit: (function(inputFile, encoding) {
+      rmarkdown::render(inputFile,
+                        encoding = encoding,
+                        output_dir = "C:/Users/ALarson/My_Projects/chi_town/Programs",
+                        output_file = "20_create_analysisfile.html") })
+---
+
+**Purpose:** Combine files in `./Data/Input` into a usable tract-level analysis file. At the time of writing this file will NOT contain all variables of interest and is a work in progress. 
+
+# Setup
+
+```{r setup}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(sf)
+library(assertr)
+library(here)
+library(ggplot2)
+library(stringr)
+library(tools)
+library(units)
+library(matrixStats)
+
+root     <- here()
+input    <- file.path(root, "Data/Input")
+analysis <- file.path(root, "Data/Analysis") 
+
+projection <- "+proj=tmerc +lat_0=36.66666666666666 +lon_0=-88.33333333333333 +k=0.9999749999999999 +x_0=300000.0000000001 +y_0=0 +ellps=GRS80 +datum=NAD83 +to_meter=0.3048006096012192 +no_defs"
+
+```
+
+# Read in data files
+
+```{r readin}
+
+file_types <- file_ext(list.files(input))
+stopifnot(all(file_types %in% c("csv", "gpkg")))
+
+read_inputs <- function(obj) {
+  
+  # Determine file extension
+  file_type <- file_ext(obj)
+  if (!file_type %in% c("csv", "gpkg")) {
+    stop(paste("Function not written to handle file type", file_type))
+  }
+  
+  if (file_type == "gpkg") {
+    st_read(file.path(input, obj)) %>%
+      st_transform(., projection)
+  } else {
+    read.csv(file.path(input, obj))
+  }
+}
+
+for (obj in list.files(input)) {
+  
+  # Determine file extension
+  file_type <- file_ext(obj)
+  
+  # Drop file extension off of name
+  obj_environment_name <- str_replace(obj, paste0("\\.", file_type, "$"), "")
+  
+  fl <- read_inputs(obj)
+  assign(obj_environment_name, fl)
+  
+}
+
+```
+
+# Create potentially useful constructs
+
+## Assign neighborhoods to tracts
+
+```{r neighborhoods_merge}
+
+overlay_tracts_nhoods <- st_intersection(tract_boundaries, nhoods_boundaries) %>%
+  mutate(aland = st_area(.))
+
+# Sometimes tracts are split over multiple neighborhoods. Assign based on largest overlap of land area.
+# Show example, GEOID 17031020400
+ex_nhoods <- filter(nhoods_boundaries, neighborhood %in% c("Rogers Park", "West Ridge"))
+ex_tract  <- filter(overlay_tracts_nhoods, geoid == "17031020400")
+# Land area in Rogers Park is infinitesimal
+overlay_tracts_nhoods %>%
+  st_set_geometry(NULL) %>%
+  filter(geoid == "17031020400") %>%
+  print(.)
+
+ggplot() +
+  geom_sf(data = ex_nhoods, fill = "gray50", alpha = 0.5) +
+  geom_sf(data = ex_tract, aes(fill = neighborhood), alpha = 0.5)
+
+dedup_tracts_nhoods <- overlay_tracts_nhoods %>%
+  st_set_geometry(NULL) %>%
+  group_by(geoid) %>%
+  arrange(desc(aland)) %>%
+  slice(., 1) %>%
+  ungroup(.) %>%
+  select(-aland)
+
+# Show example after deduping
+dedup_tracts_nhoods %>%
+  filter(geoid == "17031020400") %>%
+  print(.)
+
+```
+
+## Create parkland measurements
+
+- Distance to nearest
+- Area within a mile of tract centroid
+
+```{r parks_measurements}
+
+# Distance to nearest park ----------------------------------------------------
+
+# Distance matrix is computed in feet (map units) by default; convert to miles after computing
+parks_dist <- st_distance(tract_centroids, parks_locations) %>%
+  set_units(mile) %>%
+  drop_units(.)
+
+# N rows of distance matrix = N tracts
+stopifnot(nrow(parks_dist) == nrow(tract_centroids))
+
+# Take row minimum to get distance to nearest
+parks_mindist <- rowMins(parks_dist)
+
+# Top-code outliers. Coding to 1.001 because we compute land area within 1-mile buffer below.
+summary(parks_mindist)
+plot(density(parks_mindist))
+
+parks_mindist_topcode <- ifelse(parks_mindist > 1, 1.001, parks_mindist)
+
+summary(parks_mindist_topcode)
+plot(density(parks_mindist_topcode))
+
+print(length(which(parks_mindist != parks_mindist_topcode)))
+
+
+
+# Park area within 1 mi of tract centroid -------------------------------------
+
+centroid_buffers <- st_buffer(tract_centroids, 5280)
+
+plot(st_geometry(centroid_buffers))
+plot(st_geometry(tract_centroids), pch = 16, add = TRUE)
+plot(st_geometry(parks_locations), col = "darkgreen", add = TRUE)
+
+overlay_parks_tracts <- st_intersection(parks_locations, centroid_buffers) %>%
+  mutate(aland = st_area(.))
+
+# Show example park and overlay
+example_park <- filter(parks_locations, label == "Archer")
+example_intersects <- filter(overlay_parks_tracts, label == "Archer")
+example_tracts <- filter(centroid_buffers, geoid %in% unique(example_intersects$geoid))
+
+ggplot() +
+  geom_sf(data = example_park, fill = "darkgreen", alpha = 1) +
+  geom_sf(data = example_tracts, fill = "blue", alpha = 0.1)
+
+# Group by tract, compute total land area
+dedup_parks_tracts <- overlay_parks_tracts %>%
+  st_set_geometry(NULL) %>%
+  group_by(geoid) %>%
+  summarize(total_parkland = sum(aland)) %>%
+  ungroup(.) %>%
+  drop_units(.)
+
+# No total land area should exceed total area of a circle with a 1-mile radius (buffer size)
+stopifnot(all(dedup_parks_tracts$total_parkland < pi * (5280 ^ 2)))
+
+
+
+# Combine data ----------------------------------------------------------------
+
+parks_stats <- data.frame(
+  geoid = tract_centroids$geoid,
+  parks_mindist_topcode = parks_mindist_topcode
+) %>%
+  left_join(., dedup_parks_tracts, by = "geoid") %>%
+  mutate(parks_aland_1mi = ifelse(is.na(total_parkland), 0, total_parkland / (5280 ^ 2))) %>% # Convert sq ft to sq mi
+  select(-total_parkland)
+
+# Verify that these two stats are consistent -- If tract wasn't within a mile of nearest park, aland within 1 mi should be 0!
+stopifnot(all((parks_stats$parks_mindist_topcode == 1.001) == (parks_stats$parks_aland_1mi == 0)))
+
+```
+
+## Create library measurements
+
+- Distance to nearest
+
+```{r library_measurements}
+
+# Distance matrix is computed in feet (map units) by default; convert to miles after computing
+library_dist <- st_distance(tract_centroids, library_locations) %>%
+  set_units(mile) %>%
+  drop_units(.)
+
+# N rows of distance matrix = N tracts
+stopifnot(nrow(library_dist) == nrow(tract_centroids))
+
+# Take row minimum to get distance to nearest
+library_mindist <- rowMins(library_dist)
+
+# Top-code outliers to 95th percentile.
+summary(library_mindist)
+plot(density(library_mindist))
+
+library_mindist_topcode <- ifelse(library_mindist > quantile(library_mindist, 0.95), quantile(library_mindist, 0.95), library_mindist)
+
+summary(library_mindist_topcode)
+plot(density(library_mindist_topcode))
+
+print(length(which(library_mindist != library_mindist_topcode)))
+
+library_stats <- data.frame(
+  geoid = tract_centroids$geoid,
+  library_mindist_topcode = library_mindist_topcode
+)
+
+```
+
+## Create grocery measurements
+
+- Distance to nearest
+- Count within a half-mile of tract centroid
+
+```{r grocery_measurements}
+
+# Distance to nearest grocery store -------------------------------------------
+
+# Distance matrix is computed in feet (map units) by default; convert to miles after computing
+grocery_dist <- st_distance(tract_centroids, grocery_locations) %>%
+  set_units(mile) %>%
+  drop_units(.)
+
+# N rows of distance matrix = N tracts
+stopifnot(nrow(grocery_dist) == nrow(tract_centroids))
+
+# Take row minimum to get distance to nearest
+grocery_mindist <- rowMins(grocery_dist)
+
+# Top-code outliers to 95th percentile. This could (will?) lead to inconsistencies when computing area below.
+summary(grocery_mindist)
+plot(density(grocery_mindist))
+
+grocery_mindist_topcode <- ifelse(grocery_mindist > quantile(grocery_mindist, 0.95), quantile(grocery_mindist, 0.95), grocery_mindist)
+
+summary(grocery_mindist_topcode)
+plot(density(grocery_mindist_topcode))
+
+print(length(which(grocery_mindist != grocery_mindist_topcode)))
+
+
+
+# Count of grocery stores within 0.5 mi of tract centroid ---------------------
+
+centroid_buffers <- st_buffer(tract_centroids, 2640) # 2640 is 5280 ft (1 mi) / 2 -> 0.5 mi
+
+plot(st_geometry(centroid_buffers))
+plot(st_geometry(grocery_locations), col = "blue", pch = 16, add = TRUE)
+
+overlay_grocery_tracts <- st_intersection(grocery_locations, centroid_buffers)
+
+# Show example overlay
+example_tract <- filter(tract_boundaries, geoid == "17031832100")
+example_buffer <- filter(centroid_buffers, geoid == "17031832100")
+example_intersects <- filter(overlay_grocery_tracts, geoid == "17031832100")
+
+ggplot() +
+  geom_sf(data = example_buffer, fill = "gray50", alpha = 0.5) +
+  geom_sf(data = example_tract, fill = "blue", alpha = 1) +
+  geom_sf(data = example_intersects, color = "black")
+
+# Group by tract, compute count within each buffer
+dedup_grocery_tracts <- overlay_grocery_tracts %>%
+  st_set_geometry(NULL) %>%
+  group_by(geoid) %>%
+  summarize(n_grocery_0.5mi = n()) %>%
+  ungroup(.)
+
+print(filter(dedup_grocery_tracts, geoid == "17031832100"))
+
+
+
+# Combine data ----------------------------------------------------------------
+
+grocery_stats <- data.frame(
+  geoid = tract_centroids$geoid,
+  grocery_mindist_topcode = grocery_mindist_topcode
+) %>%
+  left_join(., dedup_grocery_tracts, by = "geoid") %>%
+  mutate(n_grocery_0.5mi = ifelse(is.na(n_grocery_0.5mi), 0, n_grocery_0.5mi))
+
+grocery_stats %>%
+  filter(n_grocery_0.5mi == 0) %>%
+  summary(grocery_mindist_topcode)
+
+```
+
+# Combine and export
+
+```{r combine_export}
+
+combined_data <- full_join(tract_boundaries, dedup_tracts_nhoods, by = "geoid") %>%
+  full_join(., parks_stats, by = "geoid") %>%
+  full_join(., library_stats, by = "geoid") %>%
+  full_join(., grocery_stats, by = "geoid")
+
+str(combined_data)
+
+ggplot(combined_data) +
+  geom_sf(aes(fill = neighborhood)) +
+  theme(legend.position = "none")
+
+st_write(combined_data, file.path(analysis, "analysisfile.gpkg"), delete_dsn = TRUE)
+
+```
