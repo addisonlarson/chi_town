@@ -1,0 +1,121 @@
+---
+title: "02_get_commute_distances"
+author: "Addison Larson"
+date: "Started 20221119 // Last knitted `r format(Sys.time(), '%Y%m%d')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    theme: yeti
+knit: (function(inputFile, encoding) {
+      rmarkdown::render(inputFile,
+                        encoding = encoding,
+                        output_dir = "C:/Users/ALarson/My_Projects/chi_town/Programs",
+                        output_file = "02_get_commute_distances.html") })
+---
+
+**Purpose:** Compute distance and time traveling from Chicago census tract centroids to Mathematica office using Google Maps Distance Matrix API. 
+
+# Setup
+
+```{r setup}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(here)
+library(sf)
+library(ggmap)
+library(lubridate)
+
+root <- here()
+raw  <- file.path(root, "Data/Raw")
+
+projection <- "+proj=tmerc +lat_0=36.66666666666666 +lon_0=-88.33333333333333 +k=0.9999749999999999 +x_0=300000.0000000001 +y_0=0 +ellps=GRS80 +datum=NAD83 +to_meter=0.3048006096012192 +no_defs"
+
+register_google(scan(file.path(root, "Keys/google_maps_api_key.txt"), what = "character"))
+
+```
+
+# Compute and set params
+
+- Time of day (set to depart at 10:00 a.m. Chicago time the Wednesday after whenever this program is run)
+- Office address
+- Compute centroids of Cook County census tracts
+
+```{r set_params}
+
+# Set to correct time zone so times are correct
+Sys.setenv(TZ = "America/Chicago")
+
+# Identify "next Wednesday" based on current time
+this_weekday_text <- wday(ymd(today()), label = TRUE)
+print(this_weekday_text)
+this_weekday_num <- wday(ymd(today()))
+
+if (this_weekday_num > 4) {
+  add_days <- 11 - this_weekday_num
+} else if (this_weekday_num < 4) {
+  add_days <- 4 - this_weekday_num
+} else {
+  add_days <- 7
+}
+
+next_wednesday <- ymd(today()) + ddays(add_days)
+print(ymd(next_wednesday))
+
+inject_string <- paste0("departure_time=", as.numeric(as.POSIXct(paste0(next_wednesday, " 8:00"))))
+
+
+
+# Office address
+ofc <- "111 E Wacker Dr, Chicago, IL 60601"
+
+
+
+# Compute tract centroids
+tract_centroids <- st_read(file.path(raw, "tract_boundaries.gpkg")) %>%
+  st_transform(projection) %>%
+  st_centroid(.) %>%
+  st_transform(4326) %>%
+  mutate(lon = st_coordinates(.)[,"X"],
+         lat = st_coordinates(.)[,"Y"],
+         coords = paste0(lat, ", ", lon)) %>%
+  st_set_geometry(NULL)
+
+```
+
+# Compute distances and export
+
+Make sure to append census tract GEOID before export.
+
+```{r compute_distances}
+
+walk_data <- mapdist(
+  from = tract_centroids$coords,
+  to = ofc,
+  mode = "walking",
+  output = "all",
+  inject = inject_string
+)
+
+names(walk_data) <- tract_centroids$GEOID
+
+saveRDS(walk_data, file = file.path(raw, "commute_dist_walk.Rds"))
+
+
+
+transit_data <- mapdist(
+  from = tract_centroids$coords,
+  to = ofc,
+  mode = "transit",
+  output = "all",
+  inject = inject_string
+)
+
+names(transit_data) <- tract_centroids$GEOID
+
+saveRDS(transit_data, file = file.path(raw, "commute_dist_transit.Rds"))
+
+```

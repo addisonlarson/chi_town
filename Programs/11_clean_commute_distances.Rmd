@@ -1,0 +1,89 @@
+---
+title: "11_clean_commute_distances"
+author: "Addison Larson"
+date: "Started 20221119 // Last knitted `r format(Sys.time(), '%Y%m%d')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    theme: yeti
+knit: (function(inputFile, encoding) {
+      rmarkdown::render(inputFile,
+                        encoding = encoding,
+                        output_dir = "C:/Users/ALarson/My_Projects/chi_town/Programs",
+                        output_file = "11_clean_commute_distances.html") })
+---
+
+**Purpose:** Extract commute distance and time info from Google Maps data queried in `02_get_commute_distances.Rmd` and saved in `./Data/Raw`.
+
+# Setup
+
+```{r setup}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+
+root  <- here()
+raw   <- file.path(root, "Data/Raw")
+input <- file.path(root, "Data/Input")
+
+```
+
+# Extract distances and times
+
+```{r extract}
+
+walk_data <- readRDS(file.path(raw, "commute_dist_walk.Rds"))
+transit_data <- readRDS(file.path(raw, "commute_dist_transit.Rds"))
+
+extract_results <- function(rds) {
+  
+  # Functions
+  get_duration_minutes <- function(obs) {
+    dur <- obs[[1]]$duration$value / 60 # Convert returned duration from seconds to minutes
+    dur <- ifelse(length(dur) == 0, NA_real_, dur)
+    return(dur)
+  }
+  
+  get_distance_miles <- function(obs) {
+    dist <- obs[[1]]$distance$value * 3.28084 / 5280 # Convert returned duration from meters to miles
+    dist <- ifelse(length(dist) == 0, NA_real_, dist)
+    return(dist)
+  }
+  
+  get_status <- function(obs) {
+    return(obs[[1]]$status)
+  }
+  
+  # Apply functions
+  duration <- lapply(rds, get_duration_minutes)
+  distance <- lapply(rds, get_distance_miles)
+  status   <- lapply(rds, get_status)
+  
+  # Combine
+  data.frame(
+    duration = do.call(rbind, duration),
+    distance = do.call(rbind, distance),
+    status   = do.call(rbind, status)
+  )
+  
+}
+
+walk_data_extract <- extract_results(walk_data)
+walk_data_extract$geoid <- row.names(walk_data_extract)
+
+transit_data_extract <- extract_results(transit_data)
+transit_data_extract$geoid <- row.names(transit_data_extract)
+
+```
+
+# Export
+
+```{r export}
+
+write.csv(walk_data_extract,    file.path(input, "commute_dist_walk.csv"),    row.names = FALSE)
+write.csv(transit_data_extract, file.path(input, "commute_dist_transit.csv"), row.names = FALSE)
+
+```
