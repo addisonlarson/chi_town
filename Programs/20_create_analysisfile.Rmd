@@ -311,14 +311,39 @@ grocery_stats %>%
 
 ```
 
+# Commute data
+
+```{r commute_data}
+
+walk_stats <- filter(commute_dist_walk, geoid %in% tract_boundaries$geoid)
+stopifnot(all(sort(walk_stats$geoid) == sort(tract_boundaries$geoid)))
+names(walk_stats)[!names(walk_stats) == "geoid"] <- paste0("walk_", names(walk_stats)[!names(walk_stats) == "geoid"])
+walk_stats$geoid <- as.character(walk_stats$geoid)
+
+transit_stats <- filter(commute_dist_transit, geoid %in% tract_boundaries$geoid)
+stopifnot(all(sort(transit_stats$geoid) == sort(tract_boundaries$geoid)))
+names(transit_stats)[!names(transit_stats) == "geoid"] <- paste0("transit_", names(transit_stats)[!names(transit_stats) == "geoid"])
+transit_stats$geoid <- as.character(transit_stats$geoid)
+
+```
+
 # Combine and export
 
 ```{r combine_export}
 
-combined_data <- full_join(tract_boundaries, dedup_tracts_nhoods, by = "geoid") %>%
-  full_join(., parks_stats, by = "geoid") %>%
-  full_join(., library_stats, by = "geoid") %>%
-  full_join(., grocery_stats, by = "geoid")
+combined_data <- Reduce(
+  full_join,
+  list(
+    tract_boundaries,
+    dedup_tracts_nhoods,
+    parks_stats,
+    library_stats,
+    grocery_stats,
+    walk_stats,
+    transit_stats
+  ),    
+  accumulate = FALSE) %>%
+  st_transform(., 4326)
 
 str(combined_data)
 
