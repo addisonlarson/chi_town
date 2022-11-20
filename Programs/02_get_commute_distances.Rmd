@@ -100,7 +100,22 @@ walk_data <- mapdist(
   inject = inject_string
 )
 
-names(walk_data) <- tract_centroids$GEOID
+# Replace names of list elements from centroids with GEOID
+# This was initially written with the assumption that mapdist return order matches row order of input data (tract_centroids) -- this appears to be wrong
+list_names <- data.frame(
+  names = names(walk_data),
+  order = 1:length(walk_data)
+) %>%
+  left_join(., tract_centroids, by = c("names" = "coords")) %>%
+  select(names, order, GEOID) %>%
+  arrange(order)
+
+# Note that first two printouts align but third does not
+print(head(list_names))
+print(head(names(walk_data)))
+print(head(tract_centroids$GEOID))
+
+names(walk_data) <- list_names$GEOID
 
 saveRDS(walk_data, file = file.path(raw, "commute_dist_walk.Rds"))
 
@@ -114,7 +129,22 @@ transit_data <- mapdist(
   inject = inject_string
 )
 
-names(transit_data) <- tract_centroids$GEOID
+# Replace names of list elements from centroids with GEOID
+# This was initially written with the assumption that mapdist return order matches row order of input data (tract_centroids) -- this appears to be wrong
+list_names <- data.frame(
+  names = names(transit_data),
+  order = 1:length(transit_data)
+) %>%
+  left_join(., tract_centroids, by = c("names" = "coords")) %>%
+  select(names, order, GEOID) %>%
+  arrange(order)
+
+# Note that first two printouts align but third does not
+print(head(list_names))
+print(head(names(transit_data)))
+print(head(tract_centroids$GEOID))
+
+names(transit_data) <- list_names$GEOID
 
 saveRDS(transit_data, file = file.path(raw, "commute_dist_transit.Rds"))
 
