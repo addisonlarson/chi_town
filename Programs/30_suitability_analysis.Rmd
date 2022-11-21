@@ -107,17 +107,15 @@ table(data$median_rent_bool, useNA = "always")
 
 ## Rescale
 
-Literally dividing by max observed so that these variables range 0-1.
+Literally dividing by max observed so that these variables range 0-1. Divide library distances so closer is better.
 
 ```{r rescale}
 
-data <- data %>%
-  mutate(
-    across(c("parks_aland_1mi", "library_mindist_topcode", "n_grocery_0.5mi"),
-           function(col) col / max(col, na.rm = TRUE),
-           .names = "{.col}_scale")) %>%
-  rename(library_mindist_scale = library_mindist_topcode_scale)
+data$parks_aland_1mi_scale <- data$parks_aland_1mi / max(data$parks_aland_1mi, na.rm = TRUE)
 
+data$library_mindist_scale <- (1 / data$library_mindist_topcode) / max(1 / data$library_mindist_topcode, na.rm = TRUE)
+
+data$n_grocery_0.5mi_scale <- data$n_grocery_0.5mi / max(data$n_grocery_0.5mi, na.rm = TRUE)
 
 ```
 
@@ -156,8 +154,6 @@ lapply(layers, plot_fn)
 ```
 
 # Aggregate and summarize by neighborhood
-
-Let's just show the top ten.
 
 ```{r aggregate}
 
