@@ -1,0 +1,194 @@
+---
+title: "30_suitability_analysis"
+author: "Addison Larson"
+date: "Started 20221120 // Last knitted `r format(Sys.time(), '%Y%m%d')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    theme: yeti
+knit: (function(inputFile, encoding) {
+      rmarkdown::render(inputFile,
+                        encoding = encoding,
+                        output_dir = "C:/Users/ALarson/My_Projects/chi_town/Programs",
+                        output_file = "30_suitability_analysis.html") })
+---
+
+**Purpose:** Use the analysis file to identify neighborhoods that are decently close to Mathematica office, don't cost \$\$\$ in rent, and ideally have other perks like a grocery store within walking distance. (This is a first draft; I ought to find better data that indicates the stock and price of studio and 1-bd units.)
+
+# Setup
+
+```{r setup}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(sf)
+library(here)
+library(ggplot2)
+library(tibble)
+
+root     <- here()
+analysis <- file.path(root, "Data/Analysis") 
+
+projection <- "+proj=tmerc +lat_0=36.66666666666666 +lon_0=-88.33333333333333 +k=0.9999749999999999 +x_0=300000.0000000001 +y_0=0 +ellps=GRS80 +datum=NAD83 +to_meter=0.3048006096012192 +no_defs"
+
+data <- st_read(file.path(analysis, "analysisfile.gpkg")) %>%
+  st_transform(projection)
+
+```
+
+# Preview layers
+
+```{r show_layers}
+
+layers <- setdiff(names(data), c("geoid", "geom"))
+
+plot_fn <- function(lyr) {
+  
+  if (is.character(data[[lyr]]) & length(unique(data[[lyr]])) > 10) {
+    suppress_legend <- TRUE
+  } else {
+    suppress_legend <- FALSE
+  }
+  
+  ggplot() +
+    geom_sf(data = data, aes(fill = get(lyr))) +
+    labs(title = lyr) +
+    theme(legend.title = element_blank()) +
+    if (suppress_legend) theme(legend.position = "none")
+
+}
+
+lapply(layers, plot_fn)
+
+```
+
+# Assign (arbitrary, subject to change) evaluation vars / weights
+
+Consider refactoring this so variables and weights aren't hard-coded in program.
+
+```{r assign_vars_weights}
+
+vars_weights <- tribble(
+  ~var, ~wt,
+  "median_rent_bool",      0.3,
+  "walk_distance_bool",    0.2,
+  "transit_duration_bool", 0.2,
+  "parks_aland_1mi_scale", 0.1,
+  "library_mindist_scale", 0.1,
+  "n_grocery_0.5mi_scale", 0.1
+)
+
+stopifnot(sum(vars_weights$wt) == 1)
+
+```
+
+# Data prep
+
+## Construct Boolean variables `walk_distance_bool`, `transit_duration_bool`, `median_rent_bool` (ie., "+ 1 if 2 mile or shorter walk from office")
+
+```{r construct_booleans}
+
+summary(data$walk_distance)
+data$walk_distance_bool <- ifelse(data$walk_distance <= 2, 1, 0)
+table(data$walk_distance_bool, useNA = "always")
+
+summary(data$transit_duration)
+data$transit_duration_bool <- ifelse(data$transit_duration <= 45, 1, 0)
+table(data$transit_duration_bool, useNA = "always")
+
+summary(data$median_rent_est)
+data$median_rent_bool <- ifelse(data$median_rent_est <= 1250, 1, 0)
+table(data$median_rent_bool, useNA = "always")
+
+```
+
+## Rescale
+
+Literally dividing by max observed so that these variables range 0-1.
+
+```{r rescale}
+
+data <- data %>%
+  mutate(
+    across(c("parks_aland_1mi", "library_mindist_topcode", "n_grocery_0.5mi"),
+           function(col) col / max(col, na.rm = TRUE),
+           .names = "{.col}_scale")) %>%
+  rename(library_mindist_scale = library_mindist_topcode_scale)
+
+
+```
+
+# Apply weights
+
+This code is going to be extra ugly. Refactor somehow?
+
+```{r apply_wts}
+
+for (var_n in 1:nrow(vars_weights)) {
+  
+  var <- vars_weights$var[var_n]
+  wt  <- vars_weights$wt[var_n]
+  
+  data$var_score <- data[[var]] * wt
+  names(data)[which(names(data) == "var_score")] <- paste0(var, "_score")
+  
+}
+
+data <- data %>%
+  rowwise(.) %>%
+  mutate(overall_score = sum(c_across(ends_with("score")))) %>%
+  ungroup(.)
+
+```
+
+# Show results
+
+```{r show_score}
+
+layers <- c(paste0(vars_weights$var, "_score"), "overall_score")
+
+lapply(layers, plot_fn)
+
+
+```
+
+# Aggregate and summarize by neighborhood
+
+Let's just show the top ten.
+
+```{r aggregate}
+
+score_by_nhood <- data %>%
+  st_set_geometry(NULL) %>%
+  group_by(neighborhood) %>%
+  summarize(avg_nhood_score = mean(overall_score, na.rm = TRUE)) %>%
+  ungroup(.) %>%
+  arrange(desc(avg_nhood_score)) %>%
+  mutate(avg_nhood_rank = row_number())
+
+print(as.data.frame(score_by_nhood))
+
+data <- left_join(data, score_by_nhood, by = "neighborhood")
+
+data %>%
+  filter(avg_nhood_rank <= 10)
+
+
+ggplot() +
+  geom_sf(data = data, fill = "gray50") +
+  geom_sf(data = filter(data, avg_nhood_rank <= 10),
+          aes(fill = avg_nhood_rank))
+  
+```
+
+# Export
+
+```{r save}
+
+st_write(data, file.path(analysis, "analysisfile_score.gpkg"), delete_dsn = TRUE)
+write.csv(st_set_geometry(data, NULL), file.path(analysis, "analysisfile_score.csv"), row.names = FALSE)
+
+```
