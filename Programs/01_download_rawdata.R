@@ -60,3 +60,13 @@ rent <- get_acs(
   survey = "acs5"
 )
 write.csv(rent, file.path(raw, "median_rent.csv"))
+
+# Land use, 2015, Chicago Metropolitan Agency for Planning
+# At time of writing, 20221215, the CMAP Data Hub (https://www.cmap.illinois.gov/data/data-hub) is offline
+# So I downloaded directly from link below
+
+url <- "https://stargishub01.blob.core.windows.net/cmap-arcgis-hub01-blob/Open_Data/LandUseInventory_2015_CMAP.zip"
+download.file(url, file.path(raw, "LandUseInventory_2015_CMAP.zip"))
+# This file is a geodatabase, so I opened in QGIS using following instructions
+# https://www.geodose.com/2022/06/how-to-open-esri-geodatabase-in-qgis.html
+# Then exported to .gpkg format as `chicago_land_use_2015.gpkg`

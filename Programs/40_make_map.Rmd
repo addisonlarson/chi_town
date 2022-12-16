@@ -37,7 +37,11 @@ root     <- here()
 analysis <- file.path(root, "Data/Analysis") 
 
 data <- st_read(file.path(analysis, "analysisfile_score.gpkg")) %>%
-  st_transform("+proj=longlat +datum=WGS84")
+  st_transform("+proj=longlat +datum=WGS84") %>%
+  mutate(
+    tract_pct_singlefamily = tract_pct_singlefamily * 100,
+    tract_pct_multifamily = tract_pct_multifamily * 100,
+  )
 
 outfile <- file.path(root, "Results/map.html")
 
@@ -120,7 +124,9 @@ add_leaflet_layer_univariate <- function(
                   "Median monthly rent: ", sprintf("%.0f", data$median_rent_est), "<br>",
                   "Distance to nearest library: ", sprintf("%.1f", data$library_mindist_topcode), "<br>",
                   "Count of nearby grocery stores: ", sprintf("%.0f", data$n_grocery_0.5mi), "<br>",
-                  "Distance to nearest park: ", sprintf("%.1f", data$parks_mindist_topcode), "<br>"
+                  "Distance to nearest park: ", sprintf("%.1f", data$parks_mindist_topcode), "<br>",
+                  "Pct. of tract land, single-family residential: ", sprintf("%.1f", data$tract_pct_singlefamily), "<br>",
+                  "Pct. of tract land, multi-family residential: ", sprintf("%.1f", data$tract_pct_multifamily), "<br>"
                 ) %>% lapply(htmltools::HTML),
                 labelOptions = labelOptions(
                   style = list("font-weight" = "normal", padding = "3 px 8 px"),
@@ -159,7 +165,7 @@ map <-
     var = "overall_score",
     cats_max = list(0.3, 0.4, 0.5, 0.6, Inf),
     labs = c("0-0.29", "0.3-0.39", "0.4-0.49", "0.5-0.59", "0.6 or more"),
-    colors = brewer.pal(5, "Blues"),
+    colors = brewer.pal(5, "PuBu"),
     layer_name = "Overall score"
   )
 map <-
@@ -170,7 +176,7 @@ map <-
     var = "transit_duration",
     cats_max = list(15, 30, 45, 60, Inf),
     labs = c("0-14", "15-29", "30-44", "45-59", "60 or more"),
-    colors = rev(brewer.pal(5, "Blues")),
+    colors = rev(brewer.pal(5, "PuBu")),
     layer_name = "Transit duration (minutes)"
   )
 map <-
@@ -181,7 +187,7 @@ map <-
     var = "walk_distance",
     cats_max = list(1, 2, 5, 10, Inf),
     labs = c("0-0.9", "1-1.9", "2-4.9", "5-9.9", "10 or more"),
-    colors = rev(brewer.pal(5, "Blues")),
+    colors = rev(brewer.pal(5, "PuBu")),
     layer_name = "Walk distance (miles)"
   )
 map <-
@@ -192,7 +198,7 @@ map <-
     var = "median_rent_est",
     cats_max = list(750, 1250, 1500, 2000, Inf),
     labs = c("0-749", "750-1,249", "1,250-1,499", "1,500-1,999", "2,000 or more"),
-    colors = rev(brewer.pal(5, "Greens")),
+    colors = rev(brewer.pal(5, "RdPu")),
     layer_name = "Median monthly rent ($)"
   )
 map <-
@@ -203,7 +209,7 @@ map <-
     var = "library_mindist_topcode",
     cats_max = list(0.25, 0.5, 1, Inf),
     labs = c("0-0.24", "0.25-0.49", "0.5-0.9", "1 or more"),
-    colors = rev(brewer.pal(4, "OrRd")),
+    colors = rev(brewer.pal(4, "GnBu")),
     layer_name = "Distance to nearest library (miles)"
   )
 map <-
@@ -214,7 +220,7 @@ map <-
     var = "n_grocery_0.5mi",
     cats_max = list(0.001, 1.001, 2.001, 3.001, Inf),
     labs = c("0", "1", "2", "3", "4 or more"),
-    colors = brewer.pal(5, "OrRd"),
+    colors = brewer.pal(5, "GnBu"),
     layer_name = "Count of grocery stores within 0.5 miles"
   )
 map <-
@@ -225,8 +231,30 @@ map <-
     var = "parks_mindist_topcode",
     cats_max = list(0.1, 0.25, 0.5, 1, Inf),
     labs = c("0", "0.1-0.24", "0.25-0.49", "0.5-0.99", "1 or more"),
-    colors = rev(brewer.pal(5, "OrRd")),
+    colors = rev(brewer.pal(5, "Greens")),
     layer_name = "Distance to nearest park (miles)"
+  )
+map <-
+  add_leaflet_layer_univariate(
+    map = map,
+    data_spatial = data,
+    idvar = "geoid",
+    var = "tract_pct_singlefamily",
+    cats_max = list(10, 20, 30, 40, Inf),
+    labs = c("0-9.9%", "10-19.9%", "20-29.9%", "30-39.9%", "40% or more"),
+    colors = brewer.pal(5, "YlGnBu"),
+    layer_name = "Pct. of tract land area, single-family residential"
+  )
+map <-
+  add_leaflet_layer_univariate(
+    map = map,
+    data_spatial = data,
+    idvar = "geoid",
+    var = "tract_pct_multifamily",
+    cats_max = list(10, 20, 30, 40, Inf),
+    labs = c("0-9.9%", "10-19.9%", "20-29.9%", "30-39.9%", "40% or more"),
+    colors = brewer.pal(5, "YlGnBu"),
+    layer_name = "Pct. of tract land area, multi-family residential"
   )
 
 map <- addLayersControl(
@@ -238,7 +266,9 @@ map <- addLayersControl(
     "Median monthly rent ($)",
     "Distance to nearest library (miles)",
     "Count of grocery stores within 0.5 miles",
-    "Distance to nearest park (miles)"
+    "Distance to nearest park (miles)",
+    "Pct. of tract land area, single-family residential",
+    "Pct. of tract land area, multi-family residential"
   ),
   options = layersControlOptions(collapsed = FALSE, autoZIndex = TRUE)
 ) %>%
@@ -248,7 +278,9 @@ map <- addLayersControl(
     "Median monthly rent ($)",
     "Distance to nearest library (miles)",
     "Count of grocery stores within 0.5 miles",
-    "Distance to nearest park (miles)"
+    "Distance to nearest park (miles)",
+    "Pct. of tract land area, single-family residential",
+    "Pct. of tract land area, multi-family residential"
   ))
 
 map

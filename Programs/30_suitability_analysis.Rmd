@@ -73,12 +73,14 @@ Consider refactoring this so variables and weights aren't hard-coded in program.
 
 vars_weights <- tribble(
   ~var, ~wt,
-  "median_rent_bool",      0.3,
-  "walk_distance_bool",    0.2,
-  "transit_duration_bool", 0.2,
-  "parks_aland_1mi_scale", 0.1,
-  "library_mindist_scale", 0.1,
-  "n_grocery_0.5mi_scale", 0.1
+  "median_rent_bool",       0.25,
+  "walk_distance_bool",     0.15,
+  "transit_duration_bool",  0.15,
+  "parks_aland_1mi_scale",  0.1,
+  "library_mindist_scale",  0.1,
+  "n_grocery_0.5mi_scale",  0.1,
+  "tract_pct_singlefamily", 0.05,
+  "tract_pct_multifamily",  0.1
 )
 
 stopifnot(sum(vars_weights$wt) == 1)
@@ -171,7 +173,6 @@ data <- left_join(data, score_by_nhood, by = "neighborhood")
 
 data %>%
   filter(avg_nhood_rank <= 10)
-
 
 ggplot() +
   geom_sf(data = data, fill = "gray50") +
